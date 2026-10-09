@@ -1,0 +1,353 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[T2A]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[russian]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{float}
+
+\geometry{left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!10},
+  keywordstyle=\color{blue},
+  commentstyle=\color{green!50!black},
+  stringstyle=\color{red!70!black},
+  language=Python,
+  showstringspaces=false,
+}
+
+\title{Проект: Многослойный персептрон}
+\author{Сагдуллин Амир 09 - 321}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+\newpage
+
+\section{Введение}
+
+Цель проекта - реализовать многослойный персептрон (MLP) с нуля на Python,
+без использования готовых библиотек машинного обучения (PyTorch, TensorFlow, Keras).
+В работе применяются только NumPy для линейной алгебры, pandas для загрузки данных
+и matplotlib для визуализации.
+
+Задача - бинарная классификация объектов из датасета Breast Cancer Wisconsin
+Diagnostic: по 30 числовым признакам, описывающим ядро клетки, необходимо определить,
+является ли опухоль злокачественной (M) или доброкачественной (B).
+
+\section{Первичный анализ данных (EDA)}
+
+\subsection{Общая информация о датасете}
+
+Датасет содержит 569 объектов и 32 столбца: идентификатор, метку класса
+(диагноз) и 30 числовых признаков. Признаки описывают три группы характеристик
+ядра клетки: средние значения (mean), стандартные ошибки (error) и худшие
+значения (worst) для десяти базовых параметров.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{eda_head.png}
+  \caption{Первые строки датасета}
+\end{figure}
+
+\subsection{Проверка качества данных}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{eda_info.png}
+  \caption{Проверка пропусков, дубликатов и типов данных}
+\end{figure}
+
+Пропусков нет, полностью дублирующихся строк нет, дублирующихся
+идентификаторов нет. Данные не требуют дополнительной очистки.
+
+\subsection{Баланс классов}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\textwidth]{eda_balance.png}
+  \caption{Распределение классов}
+\end{figure}
+
+Класс B (доброкачественные) - 357 объектов (62.7\%), класс M (злокачественные) -
+212 объектов (37.3\%). Наблюдается умеренный дисбаланс, поэтому при разделении
+данных используется стратификация.
+
+\subsection{Описательная статистика}
+
+Признаки имеют существенно разные масштабы: например, \texttt{mean area}
+варьируется в диапазоне 143.5-2501, а \texttt{mean smoothness} - в диапазоне
+0.053-0.163. Это делает необходимой нормализацию перед обучением.
+
+\subsection{Визуальный анализ признаков}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{eda_boxplot.png}
+  \caption{Boxplot топ-5 признаков по корреляции с целевой переменной}
+\end{figure}
+
+Наиболее информативные признаки чётко разделяют классы: медиана класса M
+значительно выше, чем класса B. Встречаются выбросы, но они отражают реальные
+особенности данных (аномально крупные или мелкие ядра клеток), а не ошибки
+измерений, поэтому удалять их нецелесообразно.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{eda_histograms.png}
+  \caption{Распределения значений трёх наиболее информативных признаков по классам}
+\end{figure}
+
+Гистограммы подтверждают результаты корреляционного анализа: для каждого из трёх
+признаков пики распределений классов B и M смещены относительно друг друга,
+что говорит о высокой разделяющей способности этих характеристик. При этом
+наблюдается перекрытие в средней части распределений - именно объекты из этой
+зоны и становятся сложными случаями для классификатора.
+
+\subsection{Корреляционный анализ}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{eda_corr_matrix.png}
+  \caption{Корреляционная матрица признаков}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.8\textwidth]{eda_corr_target.png}
+  \caption{Корреляция признаков с целевой переменной}
+\end{figure}
+
+Обнаружено 15 пар признаков с коэффициентом корреляции по модулю больше 0.95.
+Основные тройки: \texttt{radius}, \texttt{perimeter}, \texttt{area} -
+в каждой из групп (mean/error/worst) они почти линейно связаны между собой.
+Для MLP мультиколлинеарность не критична, поэтому удаление признаков не выполнялось.
+
+Наибольшая корреляция с целевой переменной: \texttt{worst concave points} (0.794),
+\texttt{worst perimeter} (0.783), \texttt{mean concave points} (0.777).
+
+\section{Разделение данных}
+
+Данные разделены на обучающую и валидационную выборки в пропорции 80/20
+со стратификацией по классу:
+
+\begin{verbatim}
+Train: shape=(456, 32)  B=286 (62.7%)  M=170 (37.3%)
+Valid: shape=(113, 32)  B=71  (62.8%)  M=42  (37.2%)
+\end{verbatim}
+
+Стратификация позволила сохранить пропорцию классов в обеих выборках.
+Случайное перемешивание выполнено с фиксированным seed = 42 для
+воспроизводимости результатов.
+
+\section{Архитектура нейронной сети}
+
+\subsection{Прямой проход}
+
+Для слоя с весами $W \in \mathbb{R}^{n_{\text{in}} \times n_{\text{out}}}$
+и смещением $b \in \mathbb{R}^{1 \times n_{\text{out}}}$ прямой проход:
+
+\begin{align}
+z &= x W + b, \\
+a &= f(z),
+\end{align}
+
+где $f$ — функция активации. В скрытых слоях используется сигмоида:
+
+\begin{equation}
+\sigma(z) = \frac{1}{1 + e^{-z}},
+\end{equation}
+
+на выходном слое — softmax для двух классов:
+
+\begin{equation}
+\text{softmax}(z)_i = \frac{e^{z_i}}{\sum_{j=1}^{2} e^{z_j}}.
+\end{equation}
+
+\subsection{Функция потерь}
+
+Используется бинарная кросс-энтропия (для one-hot представления двух классов):
+
+\begin{equation}
+L = -\frac{1}{N} \sum_{i=1}^{N} \sum_{k=1}^{2} y_{ik} \log \hat{p}_{ik},
+\end{equation}
+
+где $y_{ik}$ — целевое значение, $\hat{p}_{ik}$ — предсказанная вероятность.
+
+\subsection{Обратный проход}
+
+Ключевое преимущество комбинации softmax + кросс-энтропия — упрощение градиента
+на выходном слое:
+
+\begin{equation}
+\frac{\partial L}{\partial z^{(\text{out})}} = \frac{1}{N} (\hat{p} - y).
+\end{equation}
+
+Для скрытых слоёв с сигмоидой:
+
+\begin{equation}
+\frac{\partial L}{\partial z^{(l)}}
+= \frac{\partial L}{\partial a^{(l)}} \odot a^{(l)} \odot (1 - a^{(l)}),
+\end{equation}
+
+\begin{equation}
+\frac{\partial L}{\partial W^{(l)}} = (a^{(l-1)})^\top \frac{\partial L}{\partial z^{(l)}},
+\quad
+\frac{\partial L}{\partial b^{(l)}} = \sum \frac{\partial L}{\partial z^{(l)}}.
+\end{equation}
+
+\subsection{Инициализация весов}
+
+Используется инициализация He:
+
+\begin{equation}
+W_{ij} \sim \mathcal{N}\left(0, \sqrt{\frac{2}{n_{\text{in}}}}\right).
+\end{equation}
+
+\section{Реализация}
+
+Проект состоит из четырёх модулей:
+
+\begin{itemize}
+  \item \texttt{src/layers.py} - класс \texttt{DenseLayer} и функции активации
+        (\texttt{sigmoid}, \texttt{relu}, \texttt{softmax});
+  \item \texttt{src/model.py} - сборка сети (\texttt{createNetwork}), обучение
+        (\texttt{fit}), предсказание (\texttt{predict}), сохранение и загрузка
+        модели;
+  \item \texttt{src/split\_data.py} - разделение данных;
+  \item \texttt{src/train.py}, \texttt{src/predict.py} - командные интерфейсы
+        для обучения и прогнозирования.
+\end{itemize}
+
+Архитектура сети задаётся через аргументы командной строки, что позволяет
+легко экспериментировать с числом и размером слоёв.
+
+\section{Обучение}
+
+Гиперпараметры:
+
+\begin{itemize}
+  \item Архитектура: $30 \to 24 \to 24 \to 24 \to 2$
+  \item Активации: sigmoid, sigmoid, sigmoid, softmax
+  \item Функция потерь: бинарная кросс-энтропия
+  \item Оптимизатор: SGD
+  \item Learning rate: 0.0314
+  \item Batch size: 8
+  \item Количество эпох: 84
+  \item Seed: 42
+\end{itemize}
+
+Команда запуска:
+
+\begin{lstlisting}
+python src/train.py --layer 24 24 24 --epochs 84 --loss binaryCrossentropy \
+                    --batch_size 8 --learning_rate 0.0314
+\end{lstlisting}
+
+Лог обучения (фрагмент):
+
+\begin{verbatim}
+x_train shape : (456, 30)
+x_valid shape : (113, 30)
+epoch 01/84 - loss: 0.6558 - val_loss: 0.6572 - acc: 0.6272 - val_acc: 0.6283
+epoch 10/84 - loss: 0.3080 - val_loss: 0.3244 - acc: 0.9364 - val_acc: 0.9381
+epoch 20/84 - loss: 0.1054 - val_loss: 0.1209 - acc: 0.9781 - val_acc: 0.9735
+epoch 30/84 - loss: 0.0710 - val_loss: 0.0925 - acc: 0.9868 - val_acc: 0.9735
+epoch 40/84 - loss: 0.0588 - val_loss: 0.0872 - acc: 0.9868 - val_acc: 0.9735
+epoch 50/84 - loss: 0.0525 - val_loss: 0.0859 - acc: 0.9890 - val_acc: 0.9735
+epoch 60/84 - loss: 0.0483 - val_loss: 0.0867 - acc: 0.9912 - val_acc: 0.9646
+epoch 70/84 - loss: 0.0453 - val_loss: 0.0909 - acc: 0.9912 - val_acc: 0.9646
+epoch 80/84 - loss: 0.0429 - val_loss: 0.0911 - acc: 0.9912 - val_acc: 0.9558
+epoch 84/84 - loss: 0.0421 - val_loss: 0.0943 - acc: 0.9912 - val_acc: 0.9558
+> saving model 'saved_model.npy' to disk...
+> learning curves saved to 'results/figures/learning_curves.png'
+\end{verbatim}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{learning_curves.png}
+  \caption{Кривые обучения: loss (слева) и accuracy (справа)}
+\end{figure}
+
+\subsection{Анализ}
+
+Начальное значение accuracy (0.627) совпадает с долей класса B в датасете —
+это baseline, который даёт модель, предсказывающая всегда класс большинства.
+После обучения accuracy на валидации достигла 0.956, что существенно выше baseline.
+
+Наблюдается умеренное переобучение: train loss (0.0421) меньше validation loss
+(0.0943) примерно в 2.2 раза, train accuracy (0.9912) превышает validation
+accuracy (0.9558) на 3.5 процентных пункта. Кривая валидации выходит на плато
+примерно к 30-й эпохе, дальнейшее обучение не даёт прироста.
+
+\section{Прогнозирование}
+
+Команда:
+
+\begin{lstlisting}
+python src/predict.py --dataset data_split/data_validation.csv \
+                      --model_path saved_model.npy
+\end{lstlisting}
+
+\begin{verbatim}
+Test samples: 113
+Binary cross-entropy: 0.0943
+Accuracy: 0.9558
+
+First predictions:
+  #00: pred=M true=B [MISS]  p(M)=0.755
+  #01: pred=B true=B [ok]    p(M)=0.001
+  #02: pred=M true=M [ok]    p(M)=0.994
+  #03: pred=M true=M [ok]    p(M)=0.999
+  #04: pred=B true=B [ok]    p(M)=0.002
+  #05: pred=M true=M [ok]    p(M)=0.999
+  #06: pred=B true=B [ok]    p(M)=0.078
+  #07: pred=M true=M [ok]    p(M)=1.000
+  #08: pred=M true=B [MISS]  p(M)=0.881
+  #09: pred=B true=B [ok]    p(M)=0.011
+\end{verbatim}
+
+Метрики на валидационной выборке полностью совпали с последней эпохой обучения
+(0.0943 и 0.9558), что подтверждает корректность сохранения и загрузки модели,
+а также правильное применение нормализации.
+
+Обе ошибочных классификации относятся к типу false positive (модель предсказала
+M, тогда как истинный класс B). В контексте медицинской задачи это менее
+критично, чем false negative (пропуск злокачественной опухоли), однако всё
+равно требует внимания.
+
+Большинство предсказаний уверенные: вероятность $p(M)$ либо меньше 0.1, либо
+больше 0.9. Это говорит о хорошем качестве разделяющей границы.
+
+\section{Выводы}
+
+В ходе работы реализован многослойный персептрон с нуля на NumPy. Основные
+результаты:
+
+\begin{itemize}
+  \item Реализованы прямой и обратный проходы, функции активации, softmax,
+        кросс-энтропия, инициализация He, SGD.
+  \item Достигнута accuracy 95.6\% на валидационной выборке при 84 эпохах
+        обучения.
+  \item Модель корректно сохраняется и загружается, включая параметры
+        нормализации.
+  \item Наблюдается умеренное переобучение, которое можно уменьшить
+        регуляризацией (dropout, weight decay) или уменьшением числа
+        эпох/нейронов.
+  \item Для дальнейшего улучшения можно применить оптимизатор Adam,
+        BatchNorm или расширить датасет аугментациями.
+\end{itemize}
+
+\end{document}
